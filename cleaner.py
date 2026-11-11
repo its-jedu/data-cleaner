@@ -9,26 +9,50 @@ def load_file(path):
     else:
         raise ValueError('Unsupported file type')
 
+# Excel serial dates: serial 1 == 1900-01-01. Serial 73415 lands in late 2100,
+# so anything bigger is not a plausible Excel date - it is almost always a
+# compact date string such as '07092002'.
+MAX_EXCEL_SERIAL = 73415
+
+# Compact digit strings are dates, not Excel serials. Order matters: for 8 digit
+# values ISO (YYYYMMDD) is tried first, for 6 digit values day-first (DDMMYY).
+_COMPACT_DATE_FORMATS = {
+    8: ('%Y%m%d', '%d%m%Y'),
+    6: ('%d%m%y', '%y%m%d'),
+}
+
+
 def _parse_mixed_date(val):
     if pd.isna(val):
         return pd.NaT
-    # Excel serial number - handle int/float or numeric string
+    s = str(val).strip()
+
+    # 1) Compact numeric strings such as '07092002' are dates (DDMMYYYY), not
+    #    Excel serial numbers. Parse them before the serial branch below.
+    if s.isdigit() and len(s) in _COMPACT_DATE_FORMATS:
+        for fmt in _COMPACT_DATE_FORMATS[len(s)]:
+            try:
+                return pd.to_datetime(s, format=fmt, dayfirst=True)
+            except Exception:
+                continue
+
+    # 2) Excel serial number - handle int/float or numeric string, but only
+    #    when the value is in a sane date range.
     try:
         # try numeric first
         if isinstance(val, (int, float)) and not isinstance(val, bool):
             num = float(val)
         else:
-            s_tmp = str(val).strip()
             # numeric string?
-            if s_tmp.replace('.','',1).isdigit():
-                num = float(s_tmp)
+            if s.replace('.','',1).isdigit():
+                num = float(s)
             else:
                 raise ValueError
-        return pd.to_datetime('1899-12-30') + pd.Timedelta(days=num)
+        if 0 < num <= MAX_EXCEL_SERIAL:
+            return pd.to_datetime('1899-12-30') + pd.Timedelta(days=num)
     except Exception:
         pass
-    s = str(val).strip()
-    # common formats
+    # 3) common formats
     fmts = ['%d/%m/%Y','%d-%m-%Y','%d/%m/%y','%d-%m-%y','%d %m %Y','%d %m %y','%Y-%m-%d','%Y%m%d','%d%m%Y']
     for fmt in fmts:
         try:
